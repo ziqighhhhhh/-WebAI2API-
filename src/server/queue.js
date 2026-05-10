@@ -11,7 +11,12 @@ import {
     sendHeartbeat,
     sendApiError,
     buildChatCompletion,
-    buildChatCompletionChunk
+    buildChatCompletionChunk,
+    buildImagesResponse,
+    buildImagePartialEvent,
+    buildImageCompletedEvent,
+    extractPureBase64,
+    extractMimeSubtype
 } from './respond.js';
 import { ERROR_CODES } from './errors.js';
 import { incrementSuccess, incrementFailed } from '../utils/stats.js';
@@ -94,10 +99,11 @@ export function createQueueManager(queueConfig, callbacks) {
      * @param {TaskContext} task - 任务上下文
      */
     async function processTask(task) {
-        const { res, prompt, imagePaths, modelId, modelName, id, isStreaming, reasoning } = task;
+        const { res, prompt, imagePaths, modelId, modelName, id, isStreaming, reasoning, taskType = 'chat' } = task;
         const startTime = Date.now();
+        const isImageTask = taskType === 'image';
 
-        logger.info('服务器', '[队列] 开始处理任务', { id, remaining: queue.length });
+        logger.info('服务器', `[队列] 开始处理任务`, { id, remaining: queue.length, taskType });
 
         // 创建历史记录
         try {
@@ -161,34 +167,18 @@ export function createQueueManager(queueConfig, callbacks) {
             }
 
             // 生成成功
-            let finalContent = '';
-            let reasoningContent = null;  // 思考过程内容
-            let historyResponseText = '';  // 历史记录中存储的文本（不含 base64）
-
-            if (result.image) {
-                // 判断是否开启 Markdown 格式
-                const imageMarkdown = config?.server?.imageMarkdown || false;
-                if (imageMarkdown) {
-                    finalContent = `![generated](${result.image})`;
-                } else {
-                    finalContent = result.image;
-                }
-                // 历史记录只存原始 URL，不存 base64
-                historyResponseText = result.imageUrl || '';
-            } else {
-                finalContent = result.text || '生成失败';
-                historyResponseText = result.text || '';
-            }
-
-            // 提取思考过程（如果有）
-            if (result.reasoning) {
-                reasoningContent = result.reasoning;
-            }
-
             logger.info('服务器', '结果已准备就绪', { id });
             await incrementSuccess();
 
             // 更新历史记录（异步处理媒体，不阻塞响应）
+            let historyResponseText = '';
+            if (result.imageUrl) {
+                historyResponseText = result.imageUrl;
+            } else if (result.text) {
+                historyResponseText = result.text;
+            }
+            const reasoningContent = result.reasoning || null;
+
             processResponseMedia(result, id).then(responseMedia => {
                 try {
                     updateRecord(id, {
@@ -205,8 +195,62 @@ export function createQueueManager(queueConfig, callbacks) {
                 logger.debug('服务器', `处理响应媒体失败: ${e.message}`);
             });
 
-            // 发送成功响应
-            logger.info('服务器', '准备发送响应...', { id, isStreaming, contentLength: finalContent.length, hasReasoning: !!reasoningContent });
+            // ============================================================
+            // 分支 A: Image Generation API 响应格式
+            // ============================================================
+            if (isImageTask && result.image) {
+                logger.info('服务器', '准备发送 images 响应...', { id, isStreaming });
+                const b64Json = extractPureBase64(result.image);
+                const outputFormat = extractMimeSubtype(result.image);
+                const size = task.size || '1024x1024';
+                const quality = task.quality || 'auto';
+
+                if (isStreaming) {
+                    // 流式：partial_image + completed 事件
+                    // 先发一个 partial（模拟）
+                    const partialEvent = buildImagePartialEvent(b64Json, 0, outputFormat);
+                    sendSse(res, partialEvent);
+
+                    // 再发 completed
+                    const completedEvent = buildImageCompletedEvent(b64Json, {
+                        outputFormat,
+                        revised_prompt: result.revisedPrompt || null,
+                        usage: null
+                    });
+                    sendSse(res, completedEvent);
+                    sendSseDone(res);
+                    logger.info('服务器', '[images] 流式响应已结束', { id });
+                } else {
+                    // 非流式：标准 OpenAI images JSON
+                    const response = buildImagesResponse(b64Json, {
+                        modelName,
+                        outputFormat,
+                        size,
+                        quality,
+                        revisedPrompt: result.revisedPrompt || null
+                    });
+                    sendJson(res, 200, response);
+                    logger.info('服务器', '[images] JSON 响应已发送', { id });
+                }
+                return;
+            }
+
+            // ============================================================
+            // 分支 B: Chat Completion 响应格式（保持原有逻辑不变）
+            // ============================================================
+            let finalContent = '';
+            if (result.image) {
+                const imageMarkdown = config?.server?.imageMarkdown || false;
+                if (imageMarkdown) {
+                    finalContent = `![generated](${result.image})`;
+                } else {
+                    finalContent = result.image;
+                }
+            } else {
+                finalContent = result.text || '生成失败';
+            }
+
+            logger.info('服务器', '准备发送 chat 响应...', { id, isStreaming, contentLength: finalContent.length, hasReasoning: !!reasoningContent });
             if (isStreaming) {
                 const chunk = buildChatCompletionChunk(finalContent, modelName, 'stop', reasoningContent);
                 sendSse(res, chunk);

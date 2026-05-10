@@ -157,3 +157,132 @@ export function buildChatCompletionChunk(content, modelName, finishReason = 'sto
         }]
     };
 }
+
+// ==========================================
+// Image Generation API (OpenAI /v1/images/generations compatible)
+// ==========================================
+
+/**
+ * 从 data URI 中提取纯 base64 部分
+ * @param {string} dataUri - data:image/xxx;base64,... 或纯 base64
+ * @returns {string} 纯 base64 字符串
+ */
+export function extractPureBase64(dataUri) {
+    if (!dataUri) return '';
+    if (dataUri.startsWith('data:')) {
+        const commaIdx = dataUri.indexOf(',');
+        if (commaIdx >= 0 && commaIdx + 1 < dataUri.length) {
+            return dataUri.substring(commaIdx + 1);
+        }
+    }
+    return dataUri;
+}
+
+/**
+ * 从 data URI 中提取 MIME 类型（如 "png", "jpeg"）
+ * @param {string} dataUri - data URI 字符串
+ * @returns {string} MIME 子类型
+ */
+export function extractMimeSubtype(dataUri) {
+    if (!dataUri) return 'png';
+    if (dataUri.startsWith('data:')) {
+        const match = dataUri.match(/^data:image\/([^;]+);/);
+        if (match) {
+            const subtype = match[1].split('/')[0];
+            return subtype || 'png';
+        }
+    }
+    return 'png';
+}
+
+/**
+ * 构造 OpenAI 标准格式的图片生成响应（非流式）
+ * @param {string} b64Json - 纯 base64 图片数据
+ * @param {string} [revisedPrompt] - 修正后的提示词
+ * @param {string} [modelName] - 模型名称
+ * @param {string} [outputFormat] - 输出格式 (png/jpeg/webp)
+ * @param {string} [size] - 图片尺寸
+ * @param {string} [quality] - 质量
+ * @param {string} [background] - 背景模式
+ * @returns {object} OpenAI Images API 标准响应
+ */
+export function buildImagesResponse(b64Json, { revisedPrompt, modelName, outputFormat, size, quality, background } = {}) {
+    const response = {
+        created: Math.floor(Date.now() / 1000),
+        data: [{
+            b64_json: b64Json
+        }]
+    };
+
+    if (revisedPrompt) {
+        response.data[0].revised_prompt = revisedPrompt;
+    }
+    if (outputFormat) {
+        response.output_format = outputFormat;
+    } else if (b64Json) {
+        response.output_format = extractMimeSubtype(b64Json);
+    }
+    if (size) {
+        response.size = size;
+    }
+    if (quality) {
+        response.quality = quality;
+    }
+    if (background) {
+        response.background = background;
+    }
+    if (modelName) {
+        response.model = modelName;
+    }
+
+    return response;
+}
+
+/**
+ * 构造图片生成流式 SSE 事件（局部图片）
+ * @param {string} b64Partial - 部分 base64 数据
+ * @param {number} [index=0] - 图片索引
+ * @param {string} [outputFormat='png'] - 输出格式
+ * @returns {object} SSE 事件数据
+ */
+export function buildImagePartialEvent(b64Partial, index = 0, outputFormat = 'png') {
+    return {
+        type: 'image_generation.partial_image',
+        b64_json: b64Partial,
+        partial_image_index: index,
+        output_format: outputFormat
+    };
+}
+
+/**
+ * 构造图片生成流式 SSE 事件（完成）
+ * @param {string} b64Json - 完整 base64 数据
+ * @param {string} [outputFormat='png'] - 输出格式
+ * @param {string} [revisedPrompt] - 修正后的提示词
+ * @param {object} [usage] - Token 使用情况
+ * @returns {object} SSE 事件数据
+ */
+export function buildImageCompletedEvent(b64Json, { outputFormat = 'png', revisedPrompt, usage } = {}) {
+    const event = {
+        type: 'image_generation.completed',
+        b64_json: b64Json,
+        output_format: outputFormat
+    };
+
+    if (revisedPrompt) {
+        event.revised_prompt = revisedPrompt;
+    }
+    if (usage) {
+        event.usage = usage;
+    } else {
+        event.usage = {
+            input_tokens: 0,
+            output_tokens: 1,
+            output_tokens_details: {
+                image_tokens: 1
+            }
+        };
+    }
+
+    return event;
+}

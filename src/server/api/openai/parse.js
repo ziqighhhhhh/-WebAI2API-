@@ -342,3 +342,111 @@ async function saveBase64Image(dataUrl, tempDir) {
         return null;
     }
 }
+
+// ==========================================
+// Images API Parser (OpenAI /v1/images/generations)
+// ==========================================
+
+/**
+ * @typedef {object} ParsedImagesRequest
+ * @property {string} prompt - 图片生成提示词
+ * @property {string[]} imagePaths - 参考图片临时文件路径
+ * @property {string|null} modelId - 模型 ID
+ * @property {string} modelName - 原始模型名称
+ * @property {boolean} isStreaming - 是否流式请求
+ * @property {number} n - 生成数量
+ * @property {string} size - 目标尺寸
+ * @property {string} quality - 质量等级
+ * @property {string} responseFormat - 响应格式 (b64_json | url)
+ * @property {string} style - 风格
+ * @property {boolean} isEdit - 是否为编辑请求
+ */
+
+/**
+ * 解析 /v1/images/generations 请求
+ * @param {object} data - 请求体数据
+ * @param {object} options - 解析选项
+ * @param {string} options.tempDir - 临时目录路径
+ * @param {number} options.imageLimit - 参考图片数量限制
+ * @param {string} options.backendName - 后端名称
+ * @param {Function} options.getSupportedModels - 获取支持的模型列表函数
+ * @param {Function} options.getImagePolicy - 获取图片策略函数
+ * @param {string} options.requestId - 请求 ID
+ * @param {Function} options.logger - 日志函数
+ * @returns {Promise<ParseResult>} 解析结果
+ */
+export async function parseImagesRequest(data, options) {
+    const { tempDir, imageLimit, backendName, getSupportedModels, getImagePolicy, requestId, logger } = options;
+
+    const prompt = typeof data.prompt === 'string' ? data.prompt.trim() : '';
+    const isStreaming = data.stream === true;
+    const isEdit = data.image !== undefined; // images/edits 有 image 字段
+
+    if (!prompt) {
+        return parseError(ERROR_CODES.NO_IMAGE_PROMPT);
+    }
+
+    // 验证模型
+    let modelId = null;
+    let modelName = data.model || '';
+
+    if (data.model) {
+        const supportedModels = getSupportedModels();
+        const isSupported = supportedModels.data.some(m => m.id === data.model);
+
+        if (!isSupported) {
+            return parseError(ERROR_CODES.INVALID_MODEL, `模型无效/后端 ${backendName} 不支持: ${data.model}`);
+        }
+        modelId = data.model;
+    }
+
+    logger.info('服务器', `[images] 解析请求: ${prompt.slice(0, 100)}...`, { id: requestId, stream: isStreaming, model: modelId });
+
+    // 处理参考图片（images/edits 场景）
+    const imagePaths = [];
+    if (typeof data.image === 'string' && data.image.startsWith('data:image')) {
+        const imagePath = await saveBase64Image(data.image, tempDir);
+        if (imagePath) {
+            imagePaths.push(imagePath);
+        }
+    } else if (Array.isArray(data.images) && data.images.length > 0) {
+        for (let i = 0; i < data.images.length; i++) {
+            const img = data.images[i];
+            const url = typeof img === 'string' ? img : img.image_url || img.url;
+            if (typeof url === 'string' && url.startsWith('data:image')) {
+                const imagePath = await saveBase64Image(url, tempDir);
+                if (imagePath) {
+                    imagePaths.push(imagePath);
+                }
+            }
+        }
+    }
+
+    // 图片策略校验
+    const hasImage = imagePaths.length > 0;
+    const policy = modelId ? getImagePolicy(modelId) : IMAGE_POLICY.OPTIONAL;
+
+    if (policy === IMAGE_POLICY.REQUIRED && !hasImage) {
+        return parseError(ERROR_CODES.IMAGE_REQUIRED, `模型 ${modelId} 需要参考图`);
+    }
+    if (policy === IMAGE_POLICY.FORBIDDEN && hasImage) {
+        return parseError(ERROR_CODES.IMAGE_FORBIDDEN, `模型 ${modelId} 不支持图片输入`);
+    }
+
+    return {
+        success: true,
+        data: {
+            prompt,
+            imagePaths,
+            modelId,
+            modelName: modelId || modelName || 'default',
+            isStreaming,
+            n: typeof data.n === 'number' ? data.n : 1,
+            size: typeof data.size === 'string' ? data.size : '1024x1024',
+            quality: typeof data.quality === 'string' ? data.quality : 'auto',
+            responseFormat: typeof data.response_format === 'string' ? data.response_format : 'b64_json',
+            style: typeof data.style === 'string' ? data.style : undefined,
+            isEdit
+        }
+    };
+}

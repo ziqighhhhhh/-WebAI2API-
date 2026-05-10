@@ -47,6 +47,10 @@ export const ERROR_CODES = {
     INTERNAL_ERROR: 'INTERNAL_ERROR',
     /** 生成失败 */
     GENERATION_FAILED: 'GENERATION_FAILED',
+    /** 图片生成请求缺少 prompt */
+    NO_IMAGE_PROMPT: 'NO_IMAGE_PROMPT',
+    /** images/generations 请求格式无效 */
+    INVALID_IMAGES_REQUEST: 'INVALID_IMAGES_REQUEST',
 };
 
 /**
@@ -113,6 +117,16 @@ const ERROR_DETAILS = {
         message: '图片生成失败',
         status: 502,
         type: ERROR_TYPES.SERVER_ERROR,
+    },
+    [ERROR_CODES.NO_IMAGE_PROMPT]: {
+        message: '请求参数缺少 prompt',
+        status: 400,
+        type: ERROR_TYPES.INVALID_REQUEST,
+    },
+    [ERROR_CODES.INVALID_IMAGES_REQUEST]: {
+        message: 'images 请求格式无效',
+        status: 400,
+        type: ERROR_TYPES.INVALID_REQUEST,
     },
 };
 
