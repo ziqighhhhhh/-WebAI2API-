@@ -264,6 +264,7 @@ export const manifest = {
     // 模型列表
     models: [
         { id: 'gemini-3.1-flash-image-preview', codeName: 'gemini-3.1-flash-image-preview (nano-banana-2) [web-search]', imagePolicy: 'optional' },
+        { id: 'gpt-image-2', codeName: 'gpt-image-1.5-high-fidelity', imagePolicy: 'optional' },
         { id: 'gpt-image-1.5-high-fidelity', imagePolicy: 'optional' },
         { id: 'gemini-3-pro-image-preview-2k', codeName: 'gemini-3-pro-image-preview-2k (nano-banana-pro)', imagePolicy: 'optional' },
         { id: 'mai-image-2', imagePolicy: 'forbidden' },

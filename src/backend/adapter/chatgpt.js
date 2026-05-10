@@ -285,6 +285,7 @@ export const manifest = {
 
     // 模型列表
     models: [
+        { id: 'gpt-image-2', codeName: 'gpt-image-1.5', imagePolicy: 'optional' },
         { id: 'gpt-image-1.5', imagePolicy: 'optional' }
     ],
 
