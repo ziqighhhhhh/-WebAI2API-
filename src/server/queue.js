@@ -206,12 +206,21 @@ export function createQueueManager(queueConfig, callbacks) {
                 const quality = task.quality || 'auto';
 
                 if (isStreaming) {
-                    // 流式：partial_image + completed 事件
-                    // 先发一个 partial（模拟）
-                    const partialEvent = buildImagePartialEvent(b64Json, 0, outputFormat);
-                    sendSse(res, partialEvent);
+                    // 流式：分块发送 partial_image 事件，避免单个 SSE 行超 128KB
+                    const CHUNK = 64000;
+                    const totalBytes = b64Json.length;
+                    let sentChunks = 0;
 
-                    // 再发 completed
+                    for (let i = 0; i < b64Json.length; i += CHUNK) {
+                        const chunk = b64Json.slice(i, i + CHUNK);
+                        const partialEvent = buildImagePartialEvent(chunk, 0, outputFormat);
+                        sendSse(res, partialEvent);
+                        sentChunks++;
+                        if (i + CHUNK < b64Json.length) {
+                            await new Promise(r => setTimeout(r, 30));
+                        }
+                    }
+
                     const completedEvent = buildImageCompletedEvent(b64Json, {
                         outputFormat,
                         revised_prompt: result.revisedPrompt || null,
@@ -219,7 +228,7 @@ export function createQueueManager(queueConfig, callbacks) {
                     });
                     sendSse(res, completedEvent);
                     sendSseDone(res);
-                    logger.info('服务器', '[images] 流式响应已结束', { id });
+                    logger.info('服务器', '[images] 流式响应已结束', { id, chunks: sentChunks, totalBytes });
                 } else {
                     // 非流式：标准 OpenAI images JSON
                     const response = buildImagesResponse(b64Json, {
