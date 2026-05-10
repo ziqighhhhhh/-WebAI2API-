@@ -125,20 +125,45 @@ export function createOpenAIRouter(context) {
             const { prompt, imagePaths, modelId, modelName } = parseResult.data;
             const reasoning = data.reasoning === true;
 
+            // 自动检测图片模型：当 modelId 的类型为 'image' 时，taskType 设为 'image'
+            // 这样即使通过 /v1/chat/completions 调用，也能返回 Sub2API 兼容的 images 格式
+            const modelType = getModelType ? getModelType(modelId) : 'image';
+            const autoTaskType = modelType === 'image' ? 'image' : 'chat';
+
             logger.info('服务器', `[队列] 请求入队: ${prompt.slice(0, 100)}...`, { id: requestId, images: imagePaths.length });
 
             // 加入队列
-            queueManager.addTask({
-                req,
-                res,
-                prompt,
-                imagePaths,
-                modelId,
-                modelName,
-                id: requestId,
-                isStreaming,
-                reasoning
-            });
+            if (autoTaskType === 'image') {
+                queueManager.addTask({
+                    req,
+                    res,
+                    prompt,
+                    imagePaths,
+                    modelId,
+                    modelName: modelName,
+                    id: requestId,
+                    isStreaming,
+                    reasoning,
+                    // 自动标记为 image 任务，走 images API 格式响应
+                    taskType: 'image',
+                    n: 1,
+                    size: '1024x1024',
+                    quality: 'auto',
+                    responseFormat: 'b64_json'
+                });
+            } else {
+                queueManager.addTask({
+                    req,
+                    res,
+                    prompt,
+                    imagePaths,
+                    modelId,
+                    modelName,
+                    id: requestId,
+                    isStreaming,
+                    reasoning
+                });
+            }
 
         } catch (err) {
             logger.error('服务器', '请求处理失败', { id: requestId, error: err.message });
